@@ -2,4 +2,9 @@
 
 Тестируем ui на leptos. Весь код работавший с imgui вырезан.
 
-запуск сервера разработчика `trunk serve --open`
+Запуск сервера разработчика с помощью trunk
+
+```
+cargo install trunk
+trunk serve --open
+```
