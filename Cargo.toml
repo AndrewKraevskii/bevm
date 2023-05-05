@@ -5,9 +5,3 @@ edition = "2018"
 
 [dependencies]
 leptos = "0.2.5"
-
-
-[package.metadata.leptos]
-# project name
-name = "leptos-project"
-bin-package = "my-bin-name.exe"
