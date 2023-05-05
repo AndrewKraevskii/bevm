@@ -1,12 +1,9 @@
-use crate::parse::general::{GeneralCommandInfo, GeneralParser};
+use crate::parse::general::{GeneralCommandInfo, CommandParser};
 use crate::parse::mc::{parse, ExecutionResult, McParser, MicroCommandInfo};
 use crate::parse::{CommandInfo, Parser};
 use core::ops::{BitAnd, BitOr, BitXor, Shl};
-use std::cell::RefCell;
 use std::io::{BufRead, BufReader};
 use std::marker::PhantomData;
-use std::rc::Rc;
-use std::time::SystemTime;
 
 #[derive(Eq, PartialEq)]
 pub enum Register {
@@ -179,6 +176,7 @@ impl MemoryCell {
     }
 }
 
+#[derive(Clone)]
 pub struct LogEntry {
     pub command_counter: u16,
     pub micro_counter: u8,
@@ -201,10 +199,11 @@ impl IOCell {
     }
 }
 
+#[derive(Clone)]
 pub struct Computer {
     pub registers: Registers,
-    pub general_memory: Rc<RefCell<Memory<GeneralCommandInfo, GeneralParser>>>,
-    pub mc_memory: Rc<RefCell<Memory<MicroCommandInfo, McParser>>>,
+    pub general_memory: Memory<GeneralCommandInfo, CommandParser>,
+    pub mc_memory: Memory<MicroCommandInfo, McParser>,
     pub io_devices: [IOCell; 16],
     logs: Vec<LogEntry>,
 }
@@ -276,10 +275,10 @@ impl Computer {
 
     pub fn reset_memory(&mut self) {
         let data = include_bytes!("mc.txt") as &[u8];
-        for x in &mut self.mc_memory.borrow_mut().data {
+        for x in &mut self.mc_memory.data {
             x.data = 0;
         }
-        for x in &mut self.general_memory.borrow_mut().data {
+        for x in &mut self.general_memory.data {
             x.data = 0;
         }
         for line in BufReader::new(data)
@@ -291,7 +290,6 @@ impl Computer {
             let value = u16::from_str_radix(splitted.get(1).unwrap(), 16).unwrap();
 
             self.mc_memory
-                .borrow_mut()
                 .data
                 .get_mut(address as usize)
                 .unwrap()
@@ -303,18 +301,18 @@ impl Computer {
         let mut result = Computer {
             io_devices: [IOCell::new(); 16],
             registers: Registers::new(),
-            general_memory: Rc::new(RefCell::new(Memory {
+            general_memory: Memory {
                 data: Self::mem(2048),
-                parser: GeneralParser::new(),
+                parser: CommandParser::new(),
                 name: "general",
                 phantom: PhantomData::default(),
-            })),
-            mc_memory: Rc::new(RefCell::new(Memory {
+            },
+            mc_memory: Memory {
                 data: Self::mem(256),
                 parser: McParser::new(),
                 name: "mpu",
                 phantom: PhantomData::default(),
-            })),
+            },
             logs: Vec::<LogEntry>::new(),
         };
         result.reset_memory();
@@ -345,7 +343,6 @@ impl Computer {
     pub fn micro_step(&mut self) -> ExecutionResult {
         let opcode = self
             .mc_memory
-            .borrow_mut()
             .data
             .get(self.registers.r_micro_command_counter as usize)
             .unwrap()

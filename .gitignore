@@ -4,3 +4,4 @@ Cargo.lock
 *.bpc
 *.mm
 /.vscode
+/dist

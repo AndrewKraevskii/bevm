@@ -3,8 +3,6 @@ use crate::parse::{CommandInfo, Parser};
 use crate::utils::bit_registers::*;
 use core::ops::*;
 
-use imgui::Ui;
-
 struct RangeDescriptor {
     range: Range<u16>,
     short_description: &'static str,
@@ -64,52 +62,6 @@ impl MicroCommandDescriptor {
             explained,
         ))
     }
-
-    fn make_description(&self, ui: &Ui, cmd: &dyn MicroCommand) {
-        let opcode = cmd.opcode();
-
-        ui.text_wrapped(self.global_descriptions);
-
-        ui.separator();
-        ui.text("Вертикальное представление:");
-
-        let mut vertical = String::new();
-        for descriptor in &self.descriptors {
-            descriptor.value(opcode, &mut vertical);
-            vertical.push(' ')
-        }
-        ui.text(vertical);
-        ui.text("Поля (есть подсказки при наведении):");
-        for descriptor in &self.descriptors {
-            let mut description_line = String::new();
-
-            descriptor.value(opcode, &mut description_line);
-            description_line.push_str(" - ");
-            description_line.push_str(descriptor.short_description);
-
-            ui.text(description_line);
-
-            if ui.is_item_hovered() {
-                ui.tooltip_text(descriptor.explained)
-            }
-        }
-        ui.separator();
-        ui.text("Горизонтальное представление:");
-
-        let horizontal = cmd.horizontal();
-        ui.text(format!(
-            "Hex: {:0>4X} {:0>4X}",
-            horizontal.shr(16),
-            horizontal.bitand(0xFFFF)
-        ));
-        ui.text(format!(
-            "Bin: {:0>8b} {:0>8b} {:0>8b} {:0>8b}",
-            horizontal.shr(24),
-            horizontal.shr(16u32).bitand(0xFF),
-            horizontal.shr(8u32).bitand(0xFF),
-            horizontal.bitand(0xFF)
-        ));
-    }
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -119,26 +71,60 @@ pub enum ExecutionResult {
     Halted,
 }
 
-pub trait MicroCommand {
-    fn run(&self, computer: &mut Computer) -> ExecutionResult;
-    fn mnemonic(&self) -> String;
-    fn draw_highlight(&self, ui: &Ui);
-    fn opcode(&self) -> u16;
-    fn horizontal(&self) -> u32;
+#[derive(Clone, Copy)]
+pub enum MicroCommand {
+    Control(ControlCommand),
+    Operational0(OperationalCommand0),
+    Operational1(OperationalCommand1),
 }
 
+impl MicroCommand {
+    pub fn run(&self, computer: &mut Computer) -> ExecutionResult {
+        match self {
+            MicroCommand::Control(c) => c.run(computer),
+            MicroCommand::Operational0(c) => c.run(computer),
+            MicroCommand::Operational1(c) => c.run(computer),
+        }
+    }
+    pub fn mnemonic(&self) -> String {
+        match self {
+            MicroCommand::Control(c) => c.mnemonic(),
+            MicroCommand::Operational0(c) => c.mnemonic(),
+            MicroCommand::Operational1(c) => c.mnemonic(),
+        }
+    }
+    pub fn opcode(&self) -> u16 {
+        match self {
+            MicroCommand::Control(c) => c.opcode(),
+            MicroCommand::Operational0(c) => c.opcode(),
+            MicroCommand::Operational1(c) => c.opcode(),
+        }
+    }
+    pub fn horizontal(&self) -> u32 {
+        match self {
+            MicroCommand::Control(c) => c.horizontal(),
+            MicroCommand::Operational0(c) => c.horizontal(),
+            MicroCommand::Operational1(c) => c.horizontal(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 pub struct OperationalCommand0(u16);
 
+#[derive(Clone, Copy)]
 pub struct OperationalCommand1(u16);
 
+#[derive(Clone, Copy)]
 pub struct ControlCommand(u16);
 
+#[derive(Clone, Copy)]
 pub struct MicroCommandInfo {
-    command: Box<dyn MicroCommand>,
+    command: MicroCommand,
 }
 
 impl MicroCommandInfo {
-    fn new(command: Box<dyn MicroCommand>) -> MicroCommandInfo {
+    fn new(command: MicroCommand) -> MicroCommandInfo {
         MicroCommandInfo { command }
     }
 }
@@ -151,12 +137,9 @@ impl CommandInfo for MicroCommandInfo {
     fn mnemonic(&self) -> String {
         self.command.mnemonic()
     }
-
-    fn draw_highlight(&self, ui: &Ui) {
-        self.command.draw_highlight(ui)
-    }
 }
 
+#[derive(Clone, Copy)]
 pub struct McParser;
 
 impl McParser {
@@ -179,18 +162,18 @@ impl Parser<MicroCommandInfo> for McParser {
     }
 }
 
-pub fn parse(opcode: u16) -> Box<dyn MicroCommand> {
+pub fn parse(opcode: u16) -> MicroCommand {
     let sum = sub_sum(opcode, 15, 14);
     match sum {
-        0 => Box::new(OperationalCommand0(opcode)),
-        1 => Box::new(OperationalCommand1(opcode)),
-        _ => Box::new(ControlCommand(opcode)),
+        0 => MicroCommand::Operational0(OperationalCommand0(opcode)),
+        1 => MicroCommand::Operational1(OperationalCommand1(opcode)),
+        _ => MicroCommand::Control(ControlCommand(opcode)),
     }
 }
 
 use std::convert::TryInto;
 
-impl MicroCommand for ControlCommand {
+impl ControlCommand {
     fn run(&self, computer: &mut Computer) -> ExecutionResult {
         computer.log(
             true,
@@ -227,52 +210,6 @@ impl MicroCommand for ControlCommand {
             if self.needed_bit() { 1 } else { 0 },
             self.jump_address()
         )
-    }
-
-    fn draw_highlight(&self, ui: &Ui) {
-        let description = "Эта микрокоманда нужна для организации условных переходов в мпу.\n\n\
-        Работает все довольно просто:\n\
-        1. Берем регистр который указан в поле \"Проверяемый регистр\"\n\
-        2. Сравниваем его бит, номер которого записан в поле \"Проверяемый бит\" с битом сравнения.\n\
-        3. Если они совпадают, присваиваем значение поля \"Адрес перехода\" регистру СчМК. Иначе делаем \
-        ничего
-        ";
-
-        let mut descriptor = MicroCommandDescriptor::new(description);
-
-        descriptor.bit(
-            15,
-            "Код операции",
-            "Означает, что эта команда является операционной командой",
-        );
-        descriptor.bit(
-            14,
-            "Бит сравнения",
-            "Прыжок будет совершен если сравниваемый бит совпадет с этим",
-        );
-
-        descriptor.range(
-            13,
-            12,
-            "Проверяемый регистр",
-            "Из этого регистра мы возьмем проверяемый бит.\n\
-        00 - РС\n\
-        01 - РД\n\
-        10 - РК\n\
-        11 - А
-        ",
-        );
-
-        descriptor.range(
-            11,
-            8,
-            "Проверяемый бит",
-            "Номер бита, который нам нужно сравнить.",
-        );
-
-        descriptor.range(7, 0, "Адрес перехода", "В случае когда проверяемый бит совпадет с битом сравнения в СчМК будет присвоено это значение");
-
-        descriptor.make_description(ui, self)
     }
 
     fn opcode(&self) -> u16 {
@@ -326,7 +263,7 @@ fn set_bit(num: &mut u32, pos: u8, value: bool) {
     *num = num.bitor(bit);
 }
 
-impl MicroCommand for OperationalCommand0 {
+impl OperationalCommand0 {
     fn run(&self, computer: &mut Computer) -> ExecutionResult {
         match self.shift() {
             Shift::Right => {
@@ -367,7 +304,6 @@ impl MicroCommand for OperationalCommand0 {
             Memory::Write => {
                 computer
                     .general_memory
-                    .borrow_mut()
                     .data
                     .get_mut(computer.registers.r_address.bitand(0x7FF) as usize)
                     .unwrap()
@@ -383,7 +319,6 @@ impl MicroCommand for OperationalCommand0 {
             Memory::Read => {
                 computer.registers.r_data = computer
                     .general_memory
-                    .borrow_mut()
                     .data
                     .get_mut(computer.registers.r_address.bitand(0x7FF) as usize)
                     .unwrap()
@@ -507,91 +442,6 @@ impl MicroCommand for OperationalCommand0 {
         format!("{}{}", expression, memory)
     }
 
-    fn draw_highlight(&self, ui: &Ui) {
-        let desc = "Операционная команда 0\n\n\
-            Ее предназначение - работа с основной памятью, побитовые сдвиги и арифметические действия";
-
-        let mut descriptor = MicroCommandDescriptor::new(desc);
-
-        descriptor.range(
-            15,
-            14,
-            "Код операции",
-            "Означает, что эта команда является операционной командой 0",
-        );
-        descriptor.range(
-            13,
-            12,
-            "Левый вход",
-            "Регистр который будет выполнять роль левого операнда.\n\
-        00 - 0 - это не регистр. Это просто ноль.\n\
-        01 - А\n\
-        10 - РС\n\
-        11 - КР",
-        );
-        descriptor.range(
-            11,
-            10,
-            "Пустое место",
-            "Это просто бесполезные биты. Не важны что тут будет. Они бесполезны.",
-        );
-        descriptor.range(
-            9,
-            8,
-            "Правый вход",
-            "Регистр, который будет выполнять роль правого операнда.\n\
-        00 - 0 - это не регистр. Это просто ноль.\n\
-        01 - РД\n\
-        10 - РК\n\
-        11 - СК",
-        );
-        descriptor.range(
-            7,
-            6,
-            "Обратный код",
-            "От какого операнда мы будем искать обратный код.\n\
-        Oбратный код это когда единицы на нули и нули на единицы\n\
-        00 - ни от какого\n\
-        01 - от левого\n\
-        10 - от правого\n\
-        11 - ни от какого",
-        );
-        descriptor.range(
-            5,
-            4,
-            "Операция",
-            "Вид операции которую мы применим к операндам:\n\
-        00 - Левый + Правый\n\
-        01 - Левый + Правый + 1\n\
-        10 - Левый & Правый(& - побитовое И)\n\
-        11 - Левый + Правый",
-        );
-        descriptor.range(
-            3,
-            2,
-            "Сдвиг",
-            "Это поле - чад. Если мы что-то сдвигаем, то больше ничего не делаем.\n\
-        Результат бинарного сдвига попадает в БР\n\
-        Сдвигаем мы регистр A\n\
-        00 - нет сдвига\n\
-        01 - сдвиг вправо\n\
-        10 - сдвиг влево\n\
-        11 - нет сдвига\n",
-        );
-        descriptor.range(
-            1,
-            0,
-            "Память",
-            "\
-        00 - нет обмена\n\
-        01 - чтение: возьми из ячейки, адрес которой лежит в РА, основной памяти и положи в РД\n\
-        10 - запись: наоборот\n\
-        11 - нет обмена",
-        );
-
-        descriptor.make_description(ui, self);
-    }
-
     fn opcode(&self) -> u16 {
         self.0
     }
@@ -677,7 +527,7 @@ impl MicroCommand for OperationalCommand0 {
     }
 }
 
-impl MicroCommand for OperationalCommand1 {
+impl OperationalCommand1 {
     fn run(&self, computer: &mut Computer) -> ExecutionResult {
         if self.hlt() {
             computer.log(false, "Оппа, моя остановочка.".to_string());
@@ -824,88 +674,6 @@ impl MicroCommand for OperationalCommand1 {
         };
 
         format!("{}{}{}{}", io, c, nz, updated)
-    }
-
-    fn draw_highlight(&self, ui: &Ui) {
-        let desc = "Операционная команда 1\n\n\
-        Эта команда - универсальный боец. В нее пихнули все что не поместилось в другие.\n\
-        Но стоит выделить, что если операционная команда 0 изменяет только регистр БР, то эта команда \
-        умеет пересылать из БР в какой-нибудь другой регистр. Таким образом эти команды часто работают \
-        в паре.
-        ";
-
-        let mut descriptor = MicroCommandDescriptor::new(desc);
-
-        descriptor.range(
-            15,
-            14,
-            "Код операции",
-            "Означает, что эта команда является операционной командой 1",
-        );
-        descriptor.range(
-            13,
-            12,
-            "Пустое место",
-            "Это просто бесполезные биты. Не важны что тут будет. Они бесполезны.",
-        );
-        descriptor.bit(
-            11,
-            "Включить прерывания",
-            "Если 1, прерывания будут разрешены.",
-        );
-        descriptor.bit(10, "Выключить прерывания", "Если 1, прерывания будут запрещены.\nЕсли совместить с предыдущим флагом, не произойдет ничего.");
-        descriptor.bit(
-            9,
-            "Сброс готовности ВУ",
-            "Если 1, у всех ВУ будет сброшен флаг готовности.",
-        );
-        descriptor.bit(
-            8,
-            "Запуск контролера ВУ",
-            "Вот тут начинается черная магия.\n\
-        Если 1:\n\
-        1. Если РК не равно РД не делаем ничего\n\
-        2. Иначе устанавливаем 12 бит регистра РС\n\
-        3. Установка этого бита приводит в действие контролер ВУ\n\
-        4. Далее читайте описание 12 бита РС",
-        );
-        descriptor.range(
-            7,
-            6,
-            "Регистр С",
-            "Этот бит задает вид взаимодействия с 0 битом регистра РС.\n\
-        00 - нет взаимодействия\n\
-        01 - если 16 бит регистра БР равен 1, то устанавливаем С в единицу и убираем 16 бит у БР\n\
-        10 - устанавливаем С в 0\n\
-        11 - устанавливаем С в 1",
-        );
-        descriptor.bit(
-            5,
-            "Регистр N",
-            "Если 1 и если БР меньше 0, то есть 15 бит равен 1, N будет установлен в 1",
-        );
-        descriptor.bit(
-            4,
-            "Регистр Z",
-            "Если 1 и если БР равен 0, Z будет установлен в 1",
-        );
-        descriptor.bit(3, "Остановочка", "Завершает роботу эвм. Чаще всего это говорит о том что команда из основной памяти выполнена.");
-        descriptor.range(
-            2,
-            0,
-            "Выход АЛУ",
-            "Говорит о том куда пересылать содержимое БР\n\
-        000 - никуда\n\
-        001 - в РА\n\
-        010 - в РД\n\
-        011 - в РК\n\
-        100 - в СК\n\
-        101 - в А\n\
-        110 - никуда\n\
-        111 - в РА, РД, РК и А",
-        );
-
-        descriptor.make_description(ui, self);
     }
 
     fn opcode(&self) -> u16 {
