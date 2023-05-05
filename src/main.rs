@@ -15,16 +15,14 @@ fn App(cx: Scope) -> impl IntoView {
 
     let nums = move || computer().general_memory.data.iter().map(|e| view!{cx, <li>{e.get()}</li>}).collect::<Vec<_>>();
 
-    let step10000 = move |_| set_computer.update(|comp| {comp.nth(10000);});
-    let step100 = move |_| set_computer.update(|comp| {comp.nth(100);});
-    let step1 = move |_| set_computer.update(|comp| {comp.nth(1);});
+    let step = move |n| move |_| set_computer.update(|comp| {comp.nth(n);});
 
     view! {
         cx,
         "My cool computer" <br/> "General memory overview:" <br/>
-        <button on:click={step10000}>"Step 10000"</button>
-        <button on:click={step100}>"Step 100"</button>
-        <button on:click={step1}>"Step 1"</button>
+        <button on:click=step(10000)>"Step 10000"</button>
+        <button on:click=step(100)>"Step 100"</button>
+        <button on:click=step(1)>"Step 1"</button>
         <ul>
         {
             nums
